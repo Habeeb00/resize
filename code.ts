@@ -2,7 +2,7 @@
 figma.showUI(__html__);
 
 // Set the size of the plugin window.
-figma.ui.resize(300, 450);
+figma.ui.resize(300, 650);
 
 // As described in "Pillar 1: Constraint-Based Layout Engine" from the design doc,
 // we need to capture the layout rules for each element. This interface defines
@@ -55,8 +55,125 @@ function traverse(node: SceneNode, data: NodeLayoutData[]): NodeLayoutData[] {
   return data;
 }
 
+// Renamed from applyLegacyResize. This is now the primary function for transforming nodes.
+async function applyProportionalResize(node: SceneNode, scaleX: number, scaleY: number, log: string[], options: { useAdaptiveText: boolean; useContentAwareImages: boolean; useAdaptiveStrokes: boolean; }) {
+  const oldX = Math.round(node.x);
+  const oldY = Math.round(node.y);
+  
+  const newX = node.x * scaleX;
+  const newY = node.y * scaleY;
+
+  if ('resize' in node) {
+    const oldWidth = Math.round(node.width);
+    const oldHeight = Math.round(node.height);
+    const newWidth = node.width * scaleX;
+    const newHeight = node.height * scaleY;
+    node.resize(newWidth, newHeight);
+    log.push(`Resized '${node.name}' from ${oldWidth}x${oldHeight} to ${Math.round(newWidth)}x${Math.round(newHeight)}`);
+  }
+
+  if (options.useAdaptiveText && node.type === 'TEXT') {
+    if (node.fontName !== figma.mixed) {
+      await figma.loadFontAsync(node.fontName);
+      const fontScale = Math.min(scaleX, scaleY);
+      if (node.fontSize !== figma.mixed) {
+        const oldFontSize = node.fontSize;
+        const newFontSize = Math.round(node.fontSize * fontScale);
+        node.fontSize = newFontSize;
+        log.push(`Resized font in '${node.name}' from ${Math.round(oldFontSize)}pt to ${newFontSize}pt`);
+      }
+    }
+  }
+
+  if (options.useContentAwareImages && 'fills' in node && Array.isArray(node.fills)) {
+    const newFills = JSON.parse(JSON.stringify(node.fills));
+    let fillsModified = false;
+
+    for (const fill of newFills) {
+      if (fill.type === 'IMAGE' && fill.imageHash) {
+        // To properly scale the image, we need its original dimensions.
+        const image = figma.getImageByHash(fill.imageHash);
+        if (image) {
+          const { width: imgWidth, height: imgHeight } = await image.getSizeAsync();
+          
+          // Determine the scale needed to make the image cover the node's new size.
+          const nodeRatio = node.width / node.height;
+          const imgRatio = imgWidth / imgHeight;
+
+          let imgScale: number;
+          if (nodeRatio > imgRatio) {
+            // Node is wider than the image, so scale to match width.
+            imgScale = node.width / imgWidth;
+          } else {
+            // Node is taller than the image, so scale to match height.
+            imgScale = node.height / imgHeight;
+          }
+
+          // The new transform will scale the image and then center it.
+          const newTransform: Transform = [
+            [imgScale, 0, (node.width - imgWidth * imgScale) / 2],
+            [0, imgScale, (node.height - imgHeight * imgScale) / 2],
+          ];
+
+          fill.scaleMode = 'FILL'; // Ensure the fill mode is correct
+          fill.imageTransform = newTransform;
+          fillsModified = true;
+          log.push(`Applied content-aware crop to image in '${node.name}'.`);
+        }
+      }
+    }
+    if (fillsModified) {
+      node.fills = newFills;
+    }
+  }
+  
+  // New Heuristic: Adjust stroke weight on scaled vector nodes.
+  if (options.useAdaptiveStrokes && 'strokeWeight' in node && typeof node.strokeWeight === 'number' && node.strokeWeight > 0) {
+    if (node.type === 'VECTOR' || node.type === 'RECTANGLE' || node.type === 'ELLIPSE' || node.type === 'POLYGON' || node.type === 'STAR' || node.type === 'LINE') {
+      const avgScale = (scaleX + scaleY) / 2;
+      if (avgScale > 1) { // Only apply when scaling up.
+        const maxStrokeWeight = 5; // A reasonable cap to prevent overly thick lines.
+        if (node.strokeWeight > maxStrokeWeight) {
+          const oldStrokeWeight = node.strokeWeight;
+          node.strokeWeight = maxStrokeWeight;
+          log.push(`Capped stroke on '${node.name}' from ${oldStrokeWeight.toFixed(1)}px to ${node.strokeWeight}px.`);
+        }
+      }
+    }
+  }
+
+  // Clamp final position to stay within parent boundaries.
+  let finalX = newX;
+  let finalY = newY;
+
+  if (node.parent && 'width' in node.parent && 'width' in node) {
+    const parentWidth = node.parent.width;
+    const parentHeight = node.parent.height;
+    
+    // The final X cannot be less than 0.
+    // It also cannot be greater than the parent's width minus the node's own width.
+    finalX = Math.max(0, Math.min(newX, parentWidth - node.width));
+    finalY = Math.max(0, Math.min(newY, parentHeight - node.height));
+  }
+
+  node.x = finalX;
+  node.y = finalY;
+  
+  log.push(`Moved '${node.name}' from (${oldX}, ${oldY}) to (${Math.round(finalX)}, ${Math.round(finalY)})`);
+}
+
+// Renamed from resizeChildrenLegacy. This is now the only recursive resize function.
+async function resizeRecursively(node: SceneNode, scaleX: number, scaleY: number, log: string[], options: { useAdaptiveText: boolean; useContentAwareImages: boolean; useAdaptiveStrokes: boolean; }) {
+  if ("children" in node) {
+    for (const child of node.children) {
+      await applyProportionalResize(child, scaleX, scaleY, log, options);
+      await resizeRecursively(child, scaleX, scaleY, log, options);
+    }
+  }
+}
+
 // Listen for messages from the UI.
-figma.ui.onmessage = msg => {
+figma.ui.onmessage = async (msg) => {
   if (msg.type === 'traverse-frame') {
     // We start by checking the user's current selection on the Figma canvas.
     const selection = figma.currentPage.selection;
@@ -71,4 +188,35 @@ figma.ui.onmessage = msg => {
       figma.notify("Please select a single frame to process.");
     }
   }
+
+  if (msg.type === 'resize-frame') {
+    const selection = figma.currentPage.selection;
+    if (selection.length === 1 && selection[0].type === "FRAME") {
+      const originalFrame = selection[0];
+      
+      const newFrame = originalFrame.clone();
+      newFrame.x = originalFrame.x + originalFrame.width + 100;
+
+      const { width: newWidth, height: newHeight, useAdaptiveText, useContentAwareImages, useAdaptiveStrokes } = msg;
+      const resizeOptions = { useAdaptiveText, useContentAwareImages, useAdaptiveStrokes };
+      
+      const scaleX = newWidth / originalFrame.width;
+      const scaleY = newHeight / originalFrame.height;
+      
+      const resizeLog: string[] = [];
+      resizeLog.push(`Cloned '${originalFrame.name}' to '${newFrame.name}'.`);
+      resizeLog.push(`Resizing from ${Math.round(originalFrame.width)}x${Math.round(originalFrame.height)} to ${newWidth}x${newHeight}.`);
+
+      // Simplified logic: always use the reliable, recursive resizing strategy.
+      resizeLog.push('Using proportional resize for all elements.');
+      newFrame.resize(newWidth, newHeight);
+      await resizeRecursively(newFrame, scaleX, scaleY, resizeLog, resizeOptions);
+      
+      figma.ui.postMessage({ type: 'resize-log', data: resizeLog });
+      figma.notify('Frame resized successfully.');
+    } else {
+      figma.notify("Please select a single frame to resize.");
+    }
+  }
 };
+

@@ -31,12 +31,51 @@
 <body>
   <button id="traverse-btn">Traverse Selected Frame</button>
   <hr>
+  <h2>Proportional Resize</h2>
+  <div>
+    <label for="width">New Width:</label>
+    <input type="number" id="width" value="1080">
+  </div>
+  <div>
+    <label for="height">New Height:</label>
+    <input type="number" id="height" value="1080">
+  </div>
+  <div>
+    <input type="checkbox" id="adaptive-text" checked>
+    <label for="adaptive-text">Adaptive Text Resizing</label>
+  </div>
+  <div>
+    <input type="checkbox" id="content-aware-images" checked>
+    <label for="content-aware-images">Content-Aware Image Resizing</label>
+  </div>
+  <div>
+    <input type="checkbox" id="adaptive-strokes" checked>
+    <label for="adaptive-strokes">Adaptive Stroke Resizing</label>
+  </div>
+  <button id="resize-btn">Resize Frame</button>
+  <hr>
   <div id="results"></div>
 
   <script>
     document.getElementById('traverse-btn').onclick = () => {
       // When the button is clicked, send a message to the main plugin code.
       parent.postMessage({ pluginMessage: { type: 'traverse-frame' } }, '*');
+    };
+
+    document.getElementById('resize-btn').onclick = () => {
+      const width = document.getElementById('width').value;
+      const height = document.getElementById('height').value;
+      const useAdaptiveText = document.getElementById('adaptive-text').checked;
+      const useContentAwareImages = document.getElementById('content-aware-images').checked;
+      const useAdaptiveStrokes = document.getElementById('adaptive-strokes').checked;
+      parent.postMessage({ pluginMessage: { 
+        type: 'resize-frame', 
+        width: parseInt(width), 
+        height: parseInt(height), 
+        useAdaptiveText,
+        useContentAwareImages,
+        useAdaptiveStrokes,
+      } }, '*');
     };
 
     // Listen for messages from the plugin code.
@@ -49,8 +88,19 @@
         // Display new structured results
         message.data.forEach(nodeData => {
           const p = document.createElement('p');
-          // Using JSON.stringify with indentation for nice formatting
           p.textContent = JSON.stringify(nodeData, null, 2);
+          resultsDiv.appendChild(p);
+        });
+      }
+
+      if (message.type === 'resize-log') {
+        const resultsDiv = document.getElementById('results');
+        resultsDiv.innerHTML = ''; // Clear previous results
+
+        // Display log messages
+        message.data.forEach(logEntry => {
+          const p = document.createElement('p');
+          p.textContent = logEntry;
           resultsDiv.appendChild(p);
         });
       }
