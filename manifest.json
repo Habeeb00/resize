@@ -1,0 +1,8 @@
+{
+    "name": "Magic Resize",
+    "id": "UNIQUE_ID_FROM_FIGMA",
+    "api": "1.0.0",
+    "main": "code.js",
+    "ui": "ui.html",
+    "editorType": ["figma"]
+  }

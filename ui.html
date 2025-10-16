@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Magic Resize</title>
+  <style>
+    body { font-family: sans-serif; padding: 16px; }
+    button {
+      background-color: #0d99ff;
+      color: white;
+      border: none;
+      padding: 8px 16px;
+      border-radius: 4px;
+      cursor: pointer;
+      width: 100%;
+    }
+    button:hover { background-color: #007acc; }
+    hr { border: 1px solid #eee; margin: 16px 0; }
+    #results p {
+      margin: 4px 0;
+      padding: 4px;
+      background-color: #f4f4f4;
+      border-radius: 2px;
+      font-size: 12px;
+      white-space: pre-wrap; /* Allows text to wrap */
+      word-break: break-all; /* Breaks long words */
+    }
+  </style>
+</head>
+<body>
+  <button id="traverse-btn">Traverse Selected Frame</button>
+  <hr>
+  <div id="results"></div>
+
+  <script>
+    document.getElementById('traverse-btn').onclick = () => {
+      // When the button is clicked, send a message to the main plugin code.
+      parent.postMessage({ pluginMessage: { type: 'traverse-frame' } }, '*');
+    };
+
+    // Listen for messages from the plugin code.
+    window.onmessage = event => {
+      const message = event.data.pluginMessage;
+      if (message.type === 'traversal-result') {
+        const resultsDiv = document.getElementById('results');
+        resultsDiv.innerHTML = ''; // Clear previous results
+        
+        // Display new structured results
+        message.data.forEach(nodeData => {
+          const p = document.createElement('p');
+          // Using JSON.stringify with indentation for nice formatting
+          p.textContent = JSON.stringify(nodeData, null, 2);
+          resultsDiv.appendChild(p);
+        });
+      }
+    };
+  </script>
+</body>
+</html>
